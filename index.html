@@ -1,0 +1,1343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>Chroma Loom — Bioluminescent Fluid & Sound Instrument</title>
+<style>
+  :root {
+    --glass: rgba(12, 16, 28, 0.62);
+    --border: rgba(255, 255, 255, 0.14);
+    --text: #eef3ff;
+    --muted: rgba(238, 243, 255, 0.62);
+    --accent: #7df9ff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; -webkit-user-select: none; }
+  html, body {
+    width: 100%; height: 100%; overflow: hidden;
+    background: #03040a;
+    font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+    color: var(--text);
+    touch-action: none;
+  }
+  canvas#gl {
+    position: fixed; inset: 0;
+    width: 100vw; height: 100vh;
+    display: block;
+    cursor: crosshair;
+  }
+  canvas#overlay {
+    position: fixed; inset: 0;
+    width: 100vw; height: 100vh;
+    pointer-events: none;
+  }
+
+  /* Minimal floating glass HUD */
+  .hud {
+    position: fixed;
+    left: 50%; bottom: 22px;
+    transform: translateX(-50%);
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px;
+    background: var(--glass);
+    backdrop-filter: blur(18px) saturate(150%);
+    -webkit-backdrop-filter: blur(18px) saturate(150%);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    box-shadow: 0 14px 44px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+    transition: opacity 0.45s ease, transform 0.45s ease;
+    z-index: 10;
+    flex-wrap: wrap;
+    justify-content: center;
+    max-width: calc(100vw - 24px);
+  }
+  .hud.hidden {
+    opacity: 0;
+    pointer-events: none;
+    transform: translateX(-50%) translateY(18px);
+  }
+  .divider {
+    width: 1px; height: 20px;
+    background: rgba(255, 255, 255, 0.14);
+    margin: 0 2px;
+  }
+  button.pill {
+    appearance: none;
+    border: 1px solid transparent;
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text);
+    font-size: 12.5px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    padding: 7px 13px;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: inline-flex; align-items: center; gap: 6px;
+    white-space: nowrap;
+  }
+  button.pill:hover {
+    background: rgba(255, 255, 255, 0.14);
+    border-color: rgba(255, 255, 255, 0.24);
+    transform: translateY(-1px);
+  }
+  button.pill.active {
+    background: rgba(125, 249, 255, 0.18);
+    border-color: rgba(125, 249, 255, 0.55);
+    color: #ffffff;
+    box-shadow: 0 0 18px rgba(125, 249, 255, 0.28);
+  }
+  .swatch {
+    width: 9px; height: 9px; border-radius: 50%;
+    display: inline-block;
+    box-shadow: 0 0 8px currentColor;
+  }
+
+  /* Subtle top-left title & hint */
+  .banner {
+    position: fixed; top: 20px; left: 24px;
+    pointer-events: none;
+    z-index: 9;
+    transition: opacity 0.6s ease;
+  }
+  .banner.hidden { opacity: 0; }
+  .banner h1 {
+    font-size: 15px; font-weight: 600;
+    letter-spacing: 0.16em; text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.85);
+    text-shadow: 0 2px 14px rgba(0, 0, 0, 0.8);
+  }
+  .banner p {
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--muted);
+    text-shadow: 0 2px 10px rgba(0, 0, 0, 0.8);
+  }
+
+  /* Sound wake-up badge on first visit */
+  .sound-toast {
+    position: fixed; top: 20px; right: 24px;
+    padding: 7px 14px;
+    border-radius: 999px;
+    background: var(--glass);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--muted);
+    cursor: pointer;
+    z-index: 10;
+    transition: all 0.25s ease;
+  }
+  .sound-toast:hover { color: #fff; border-color: rgba(255,255,255,0.35); }
+  .sound-toast.hidden { opacity: 0; pointer-events: none; }
+</style>
+</head>
+<body>
+
+<canvas id="gl"></canvas>
+<canvas id="overlay"></canvas>
+
+<div class="banner" id="banner">
+  <h1>Chroma Loom</h1>
+  <p>Paint living currents &bull; Click to plant gravity stars &bull; Right-click to erase stars &bull; Space: supernova &bull; H: hide controls</p>
+</div>
+
+<button class="sound-toast" id="soundBadge" title="Toggle generative ambient synth (M)">
+  &#9835; Sound: Wake on touch
+</button>
+
+<div class="hud" id="hud">
+  <button class="pill active" data-palette="0"><span class="swatch" style="background:#3cf2de;color:#3cf2de"></span>Aurora</button>
+  <button class="pill" data-palette="1"><span class="swatch" style="background:#ff4db8;color:#ff4db8"></span>Coral</button>
+  <button class="pill" data-palette="2"><span class="swatch" style="background:#ffb347;color:#ffb347"></span>Gold Nebula</button>
+  <button class="pill" data-palette="3"><span class="swatch" style="background:#8e7dff;color:#8e7dff"></span>Moonjelly</button>
+  <button class="pill" data-palette="4"><span class="swatch" style="background:#ff512f;color:#ff512f"></span>Ember</button>
+  <div class="divider"></div>
+  <button class="pill" id="btnSym" title="Toggle 6-fold kaleidoscope symmetry (K)">&#10038; Kaleidoscope</button>
+  <button class="pill active" id="btnAuto" title="Gentle autonomous dream currents (A)">&#10022; Dream</button>
+  <button class="pill" id="btnPulse" title="Trigger harmonic supernova (Space)">&#9728; Supernova</button>
+  <button class="pill" id="btnClearStars" title="Release gravity stars (C)">&#9734; Clear Stars</button>
+  <button class="pill" id="btnSnap" title="Save PNG snapshot (S)">&#128247;</button>
+</div>
+
+<script>
+(() => {
+  "use strict";
+
+  // =========================================================================
+  // 1. Palettes & Musical Scales (each visual world has its own harmonic mode!)
+  // =========================================================================
+  const PALETTES = [
+    {
+      name: "Aurora",
+      bg: [0.012, 0.018, 0.038],
+      colors: [
+        [0.12, 0.98, 0.78],
+        [0.16, 0.62, 1.00],
+        [0.62, 0.28, 1.00],
+        [0.35, 1.00, 0.55],
+      ],
+      // Lydian Fmaj9 intervals in Hz (warm, floating, celestial)
+      rootHz: 174.61, // F3
+      ratios: [1, 9/8, 5/4, 45/32, 3/2, 27/16, 15/8, 2, 9/4, 5/2, 3],
+    },
+    {
+      name: "Coral",
+      bg: [0.024, 0.008, 0.032],
+      colors: [
+        [1.00, 0.22, 0.66],
+        [0.15, 0.92, 0.98],
+        [1.00, 0.54, 0.22],
+        [0.72, 0.24, 1.00],
+      ],
+      // Major pentatonic Db (lush, reef-like)
+      rootHz: 138.59, // Db3
+      ratios: [1, 9/8, 5/4, 3/2, 27/16, 2, 9/4, 5/2, 3, 27/8],
+    },
+    {
+      name: "Gold Nebula",
+      bg: [0.022, 0.014, 0.010],
+      colors: [
+        [1.00, 0.72, 0.18],
+        [1.00, 0.36, 0.14],
+        [0.28, 0.76, 0.96],
+        [1.00, 0.92, 0.55],
+      ],
+      // Mixolydian suspended A2 (cinematic, brassy warmth)
+      rootHz: 110.0, // A2
+      ratios: [1, 9/8, 4/3, 3/2, 16/9, 2, 9/4, 8/3, 3, 4],
+    },
+    {
+      name: "Moonjelly",
+      bg: [0.006, 0.012, 0.030],
+      colors: [
+        [0.45, 0.55, 1.00],
+        [0.24, 0.95, 0.96],
+        [0.86, 0.52, 1.00],
+        [0.65, 0.88, 1.00],
+      ],
+      // Hirajoshi-inspired Eb minor9 (deep sea,crystalline)
+      rootHz: 155.56, // Eb3
+      ratios: [1, 9/8, 6/5, 3/2, 8/5, 9/5, 2, 12/5, 3, 16/5],
+    },
+    {
+      name: "Ember",
+      bg: [0.025, 0.006, 0.006],
+      colors: [
+        [1.00, 0.24, 0.08],
+        [1.00, 0.62, 0.10],
+        [0.98, 0.12, 0.42],
+        [1.00, 0.88, 0.36],
+      ],
+      // Dorian C3 (smoldering, hypnotic)
+      rootHz: 130.81, // C3
+      ratios: [1, 9/8, 6/5, 4/3, 3/2, 27/16, 9/5, 2, 12/5, 3],
+    },
+  ];
+
+  let currentPaletteIdx = 0;
+  let kaleidoscope = false;
+  let dreamMode = true;
+  let hudVisible = true;
+
+  // =========================================================================
+  // 2. Generative Web Audio Synthesizer (zero external files!)
+  // =========================================================================
+  class AmbientLoomAudio {
+    constructor() {
+      this.ctx = null;
+      this.muted = false;
+      this.started = false;
+      this.lastChimeTime = 0;
+      this.droneOscs = [];
+    }
+
+    init() {
+      if (this.started) {
+        if (this.ctx && this.ctx.state === "suspended") this.ctx.resume();
+        return;
+      }
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+      this.ctx = new AudioCtx();
+      this.started = true;
+
+      // Master chain: soft limiter/compressor + stereo lush algorithmic reverb
+      this.master = this.ctx.createGain();
+      this.master.gain.value = 0.65;
+
+      const comp = this.ctx.createDynamicsCompressor();
+      comp.threshold.value = -16;
+      comp.ratio.value = 4;
+      comp.attack.value = 0.01;
+      comp.release.value = 0.25;
+
+      // Procedural stereo shimmer reverb impulse (3.4 seconds)
+      this.convolver = this.ctx.createConvolver();
+      this.convolver.buffer = this.buildImpulse(3.4, 2.6);
+      this.wetGain = this.ctx.createGain();
+      this.wetGain.gain.value = 0.52;
+      this.dryGain = this.ctx.createGain();
+      this.dryGain.gain.value = 0.62;
+
+      // Ping-pong stereo delay
+      this.delayL = this.ctx.createDelay(1.0);
+      this.delayR = this.ctx.createDelay(1.0);
+      this.delayL.delayTime.value = 0.375;
+      this.delayR.delayTime.value = 0.5;
+      const fb = this.ctx.createGain();
+      fb.gain.value = 0.28;
+      const delayFilter = this.ctx.createBiquadFilter();
+      delayFilter.type = "lowpass";
+      delayFilter.frequency.value = 2200;
+      const merger = this.ctx.createChannelMerger(2);
+
+      this.bus = this.ctx.createGain();
+      this.bus.connect(this.dryGain);
+      this.bus.connect(this.convolver);
+      this.convolver.connect(this.wetGain);
+
+      this.bus.connect(delayFilter);
+      delayFilter.connect(this.delayL);
+      this.delayL.connect(this.delayR);
+      this.delayR.connect(fb);
+      fb.connect(delayFilter);
+      this.delayL.connect(merger, 0, 0);
+      this.delayR.connect(merger, 0, 1);
+      const delayOut = this.ctx.createGain();
+      delayOut.gain.value = 0.24;
+      merger.connect(delayOut);
+
+      this.dryGain.connect(comp);
+      this.wetGain.connect(comp);
+      delayOut.connect(comp);
+      comp.connect(this.master);
+      this.master.connect(this.ctx.destination);
+
+      // Velvet fluid-motion pad (filtered stereo detuned sine/triangle drone)
+      this.padFilter = this.ctx.createBiquadFilter();
+      this.padFilter.type = "lowpass";
+      this.padFilter.frequency.value = 260;
+      this.padFilter.Q.value = 2.2;
+
+      this.padGain = this.ctx.createGain();
+      this.padGain.gain.value = 0.02;
+      this.padFilter.connect(this.padGain);
+      this.padGain.connect(this.bus);
+
+      this.setupDroneVoices();
+      updateSoundBadge();
+    }
+
+    buildImpulse(seconds, decay) {
+      const rate = this.ctx.sampleRate;
+      const len = Math.floor(rate * seconds);
+      const buf = this.ctx.createBuffer(2, len, rate);
+      for (let ch = 0; ch < 2; ch++) {
+        const d = buf.getChannelData(ch);
+        let lp = 0;
+        for (let i = 0; i < len; i++) {
+          const t = i / len;
+          const env = Math.pow(1 - t, decay) * (1 - Math.exp(-i / (rate * 0.02)));
+          const white = Math.random() * 2 - 1;
+          lp = lp * 0.72 + white * 0.28;
+          d[i] = lp * env * 0.55;
+        }
+      }
+      return buf;
+    }
+
+    setupDroneVoices() {
+      if (!this.ctx) return;
+      const now = this.ctx.currentTime;
+      this.droneOscs.forEach(o => {
+        try { o.gain.gain.linearRampToValueAtTime(0.0001, now + 0.8); o.osc.stop(now + 0.9); } catch (_) {}
+      });
+      this.droneOscs = [];
+      const pal = PALETTES[currentPaletteIdx];
+      const freqs = [pal.rootHz * 0.5, pal.rootHz, pal.rootHz * 1.5, pal.rootHz * pal.ratios[2]];
+      freqs.forEach((f, idx) => {
+        const osc = this.ctx.createOscillator();
+        const g = this.ctx.createGain();
+        osc.type = idx === 0 ? "sine" : (idx % 2 === 1 ? "triangle" : "sine");
+        osc.frequency.value = f;
+        osc.detune.value = (idx - 1.5) * 5.5;
+        g.gain.setValueAtTime(0.0001, now);
+        g.gain.linearRampToValueAtTime(idx === 0 ? 0.30 : 0.14, now + 1.2);
+        osc.connect(g);
+        g.connect(this.padFilter);
+        osc.start(now);
+        this.droneOscs.push({ osc, gain: g });
+      });
+    }
+
+    modulateMotion(speed01, y01) {
+      if (!this.ctx || this.muted) return;
+      const now = this.ctx.currentTime;
+      const targetCutoff = 190 + speed01 * 1850 + y01 * 420;
+      const targetGain = 0.028 + Math.min(0.18, speed01 * 0.16);
+      this.padFilter.frequency.setTargetAtTime(targetCutoff, now, 0.08);
+      this.padGain.gain.setTargetAtTime(targetGain, now, 0.10);
+
+      // Gentle crystalline water-harp arpeggio when sweeping rapidly
+      if (speed01 > 0.22 && now - this.lastChimeTime > Math.max(0.075, 0.26 - speed01 * 0.18)) {
+        this.lastChimeTime = now;
+        this.playPluck(y01, Math.min(1, speed01 * 0.85), (Math.random() - 0.5) * 1.4);
+      }
+    }
+
+    playPluck(pitch01, vel = 0.5, pan = 0) {
+      if (!this.ctx || this.muted) return;
+      const now = this.ctx.currentTime;
+      const pal = PALETTES[currentPaletteIdx];
+      const idx = Math.min(
+        pal.ratios.length - 1,
+        Math.max(0, Math.floor(pitch01 * pal.ratios.length))
+      );
+      const freq = pal.rootHz * pal.ratios[idx] * (Math.random() < 0.25 ? 2 : 1);
+
+      const osc = this.ctx.createOscillator();
+      const sub = this.ctx.createOscillator();
+      const filt = this.ctx.createBiquadFilter();
+      const env = this.ctx.createGain();
+      const panner = this.ctx.createStereoPanner ? this.ctx.createStereoPanner() : null;
+
+      osc.type = "triangle";
+      osc.frequency.setValueAtTime(freq, now);
+      sub.type = "sine";
+      sub.frequency.setValueAtTime(freq * 2, now);
+
+      filt.type = "lowpass";
+      filt.frequency.setValueAtTime(freq * (2.5 + vel * 3.5), now);
+      filt.frequency.exponentialRampToValueAtTime(Math.max(220, freq * 1.1), now + 1.4);
+
+      const peak = 0.09 * (0.35 + vel * 0.65);
+      env.gain.setValueAtTime(0.0001, now);
+      env.gain.linearRampToValueAtTime(peak, now + 0.012);
+      env.gain.exponentialRampToValueAtTime(0.0001, now + 1.85);
+
+      const subGain = this.ctx.createGain();
+      subGain.gain.value = 0.22;
+
+      osc.connect(filt);
+      sub.connect(subGain);
+      subGain.connect(filt);
+      filt.connect(env);
+      if (panner) {
+        panner.pan.value = Math.max(-1, Math.min(1, pan));
+        env.connect(panner);
+        panner.connect(this.bus);
+      } else {
+        env.connect(this.bus);
+      }
+      osc.start(now);
+      sub.start(now);
+      osc.stop(now + 1.95);
+      sub.stop(now + 1.95);
+    }
+
+    playChordBloom(x01 = 0.5, y01 = 0.5, grand = false) {
+      if (!this.ctx || this.muted) return;
+      const steps = grand ? [0, 2, 4, 6, 7, 9] : [0, 2, 4, 7];
+      steps.forEach((s, i) => {
+        setTimeout(() => {
+          const p = Math.min(0.99, Math.max(0.01, (y01 * 0.5) + (s / 11)));
+          this.playPluck(p, grand ? 0.9 : 0.65, (x01 - 0.5) * 1.6);
+        }, i * (grand ? 55 : 40));
+      });
+    }
+
+    toggleMute() {
+      if (!this.started) {
+        this.init();
+        return;
+      }
+      this.muted = !this.muted;
+      const now = this.ctx.currentTime;
+      this.master.gain.setTargetAtTime(this.muted ? 0.0001 : 0.65, now, 0.06);
+      updateSoundBadge();
+    }
+  }
+
+  const audio = new AmbientLoomAudio();
+  const soundBadge = document.getElementById("soundBadge");
+  function updateSoundBadge() {
+    if (!audio.started) {
+      soundBadge.innerHTML = "&#9835; Sound: Wake on touch";
+    } else if (audio.muted) {
+      soundBadge.innerHTML = "&#9835; Sound: Muted (M)";
+    } else {
+      soundBadge.innerHTML = "&#9835; Sound: On (M)";
+    }
+  }
+  soundBadge.addEventListener("click", (e) => {
+    e.stopPropagation();
+    audio.toggleMute();
+  });
+
+  // =========================================================================
+  // 3. WebGL Navier-Stokes Fluid + Bioluminescent Bloom + Starfield Engine
+  // =========================================================================
+  const canvas = document.getElementById("gl");
+  const overlay = document.getElementById("overlay");
+  const octx = overlay.getContext("2d");
+
+  const gl = canvas.getContext("webgl2", { alpha: false, preserveDrawingBuffer: true })
+          || canvas.getContext("webgl", { alpha: false, preserveDrawingBuffer: true });
+
+  if (!gl) {
+    document.body.innerHTML = "<div style='padding:40px;color:#fff'>WebGL is required to view Chroma Loom.</div>";
+    return;
+  }
+
+  const isWebGL2 = (typeof WebGL2RenderingContext !== "undefined") && (gl instanceof WebGL2RenderingContext);
+  let halfFloatTexType;
+  let rgbaFormat, rgFormat, rFormat;
+  let supportLinearFiltering = false;
+
+  if (isWebGL2) {
+    gl.getExtension("EXT_color_buffer_float");
+    supportLinearFiltering = !!gl.getExtension("OES_texture_float_linear");
+    halfFloatTexType = gl.HALF_FLOAT;
+    rgbaFormat = { internalFormat: gl.RGBA16F, format: gl.RGBA };
+    rgFormat = { internalFormat: gl.RG16F, format: gl.RG };
+    rFormat = { internalFormat: gl.R16F, format: gl.RED };
+  } else {
+    const hf = gl.getExtension("OES_texture_half_float");
+    supportLinearFiltering = !!gl.getExtension("OES_texture_half_float_linear");
+    gl.getExtension("WEBGL_color_buffer_float");
+    gl.getExtension("EXT_color_buffer_half_float");
+    halfFloatTexType = hf ? hf.HALF_FLOAT_OES : gl.UNSIGNED_BYTE;
+    rgbaFormat = { internalFormat: gl.RGBA, format: gl.RGBA };
+    rgFormat = rgbaFormat;
+    rFormat = rgbaFormat;
+  }
+
+  function compileShader(type, src) {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error(gl.getShaderInfoLog(s), src);
+    }
+    return s;
+  }
+
+  function createProgram(vsSrc, fsSrc) {
+    const p = gl.createProgram();
+    gl.attachShader(p, compileShader(gl.VERTEX_SHADER, vsSrc));
+    gl.attachShader(p, compileShader(gl.FRAGMENT_SHADER, fsSrc));
+    gl.linkProgram(p);
+    const uniforms = {};
+    const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+    for (let i = 0; i < n; i++) {
+      const name = gl.getActiveUniform(p, i).name.replace(/\[0\]$/, "");
+      uniforms[name] = gl.getUniformLocation(p, name);
+    }
+    return { program: p, uniforms, bind() { gl.useProgram(p); } };
+  }
+
+  const baseVS = `
+    precision highp float;
+    attribute vec2 aPosition;
+    varying vec2 vUv;
+    varying vec2 vL;
+    varying vec2 vR;
+    varying vec2 vT;
+    varying vec2 vB;
+    uniform vec2 texelSize;
+    void main () {
+      vUv = aPosition * 0.5 + 0.5;
+      vL = vUv - vec2(texelSize.x, 0.0);
+      vR = vUv + vec2(texelSize.x, 0.0);
+      vT = vUv + vec2(0.0, texelSize.y);
+      vB = vUv - vec2(0.0, texelSize.y);
+      gl_Position = vec4(aPosition, 0.0, 1.0);
+    }
+  `;
+
+  const clearFS = `
+    precision mediump float;
+    varying highp vec2 vUv;
+    uniform sampler2D uTexture;
+    uniform float value;
+    void main () {
+      gl_FragColor = value * texture2D(uTexture, vUv);
+    }
+  `;
+
+  const splatFS = `
+    precision highp float;
+    varying vec2 vUv;
+    uniform sampler2D uTarget;
+    uniform float aspectRatio;
+    uniform vec3 color;
+    uniform vec2 point;
+    uniform float radius;
+    void main () {
+      vec2 p = vUv - point.xy;
+      p.x *= aspectRatio;
+      vec3 splat = exp(-dot(p, p) / radius) * color;
+      vec3 base = texture2D(uTarget, vUv).xyz;
+      gl_FragColor = vec4(base + splat, 1.0);
+    }
+  `;
+
+  const advectionFS = `
+    precision highp float;
+    varying vec2 vUv;
+    uniform sampler2D uVelocity;
+    uniform sampler2D uSource;
+    uniform vec2 texelSize;
+    uniform float dt;
+    uniform float dissipation;
+    void main () {
+      vec2 coord = vUv - dt * texture2D(uVelocity, vUv).xy * texelSize;
+      vec4 result = texture2D(uSource, coord);
+      float decay = 1.0 + dissipation * dt;
+      gl_FragColor = result / decay;
+    }
+  `;
+
+  const divergenceFS = `
+    precision mediump float;
+    varying highp vec2 vUv;
+    varying highp vec2 vL;
+    varying highp vec2 vR;
+    varying highp vec2 vT;
+    varying highp vec2 vB;
+    uniform sampler2D uVelocity;
+    void main () {
+      float L = texture2D(uVelocity, vL).x;
+      float R = texture2D(uVelocity, vR).x;
+      float T = texture2D(uVelocity, vT).y;
+      float B = texture2D(uVelocity, vB).y;
+      vec2 C = texture2D(uVelocity, vUv).xy;
+      if (vL.x < 0.0) L = -C.x;
+      if (vR.x > 1.0) R = -C.x;
+      if (vT.y > 1.0) T = -C.y;
+      if (vB.y < 0.0) B = -C.y;
+      float div = 0.5 * (R - L + T - B);
+      gl_FragColor = vec4(div, 0.0, 0.0, 1.0);
+    }
+  `;
+
+  const curlFS = `
+    precision mediump float;
+    varying highp vec2 vUv;
+    varying highp vec2 vL;
+    varying highp vec2 vR;
+    varying highp vec2 vT;
+    varying highp vec2 vB;
+    uniform sampler2D uVelocity;
+    void main () {
+      float L = texture2D(uVelocity, vL).y;
+      float R = texture2D(uVelocity, vR).y;
+      float T = texture2D(uVelocity, vT).x;
+      float B = texture2D(uVelocity, vB).x;
+      float vorticity = R - L - T + B;
+      gl_FragColor = vec4(0.5 * vorticity, 0.0, 0.0, 1.0);
+    }
+  `;
+
+  const vorticityFS = `
+    precision highp float;
+    varying vec2 vUv;
+    varying vec2 vL;
+    varying vec2 vR;
+    varying vec2 vT;
+    varying vec2 vB;
+    uniform sampler2D uVelocity;
+    uniform sampler2D uCurl;
+    uniform float curl;
+    uniform float dt;
+    void main () {
+      float L = texture2D(uCurl, vL).x;
+      float R = texture2D(uCurl, vR).x;
+      float T = texture2D(uCurl, vT).x;
+      float B = texture2D(uCurl, vB).x;
+      float C = texture2D(uCurl, vUv).x;
+      vec2 force = 0.5 * vec2(abs(T) - abs(B), abs(R) - abs(L));
+      force /= length(force) + 0.0001;
+      force *= curl * C;
+      force.y *= -1.0;
+      vec2 vel = texture2D(uVelocity, vUv).xy;
+      vel += force * dt;
+      vel = clamp(vel, -1200.0, 1200.0);
+      gl_FragColor = vec4(vel, 0.0, 1.0);
+    }
+  `;
+
+  const pressureFS = `
+    precision mediump float;
+    varying highp vec2 vUv;
+    varying highp vec2 vL;
+    varying highp vec2 vR;
+    varying highp vec2 vT;
+    varying highp vec2 vB;
+    uniform sampler2D uPressure;
+    uniform sampler2D uDivergence;
+    void main () {
+      float L = texture2D(uPressure, vL).x;
+      float R = texture2D(uPressure, vR).x;
+      float T = texture2D(uPressure, vT).x;
+      float B = texture2D(uPressure, vB).x;
+      float divergence = texture2D(uDivergence, vUv).x;
+      float pressure = (L + R + B + T - divergence) * 0.25;
+      gl_FragColor = vec4(pressure, 0.0, 0.0, 1.0);
+    }
+  `;
+
+  const gradSubtractFS = `
+    precision mediump float;
+    varying highp vec2 vUv;
+    varying highp vec2 vL;
+    varying highp vec2 vR;
+    varying highp vec2 vT;
+    varying highp vec2 vB;
+    uniform sampler2D uPressure;
+    uniform sampler2D uVelocity;
+    void main () {
+      float L = texture2D(uPressure, vL).x;
+      float R = texture2D(uPressure, vR).x;
+      float T = texture2D(uPressure, vT).x;
+      float B = texture2D(uPressure, vB).x;
+      vec2 velocity = texture2D(uVelocity, vUv).xy;
+      velocity.xy -= vec2(R - L, T - B);
+      gl_FragColor = vec4(velocity, 0.0, 1.0);
+    }
+  `;
+
+  const bloomBlurFS = `
+    precision mediump float;
+    varying highp vec2 vUv;
+    varying highp vec2 vL;
+    varying highp vec2 vR;
+    varying highp vec2 vT;
+    varying highp vec2 vB;
+    uniform sampler2D uTexture;
+    void main () {
+      vec4 sum = texture2D(uTexture, vUv) * 0.28;
+      sum += texture2D(uTexture, vL) * 0.18;
+      sum += texture2D(uTexture, vR) * 0.18;
+      sum += texture2D(uTexture, vT) * 0.18;
+      sum += texture2D(uTexture, vB) * 0.18;
+      gl_FragColor = sum;
+    }
+  `;
+
+  const displayFS = `
+    precision highp float;
+    varying vec2 vUv;
+    uniform sampler2D uTexture;
+    uniform sampler2D uBloom;
+    uniform vec3 uBgColor;
+    uniform float uTime;
+    uniform float uAspect;
+
+    // Subtle deep-space shimmer & filmic ACES tonemapping
+    float hash21(vec2 p) {
+      p = fract(p * vec2(123.34, 456.21));
+      p += dot(p, p + 45.32);
+      return fract(p.x * p.y);
+    }
+
+    vec3 aces(vec3 x) {
+      const float a = 2.51;
+      const float b = 0.03;
+      const float c = 2.43;
+      const float d = 0.59;
+      const float e = 0.14;
+      return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+    }
+
+    void main () {
+      vec3 dye = texture2D(uTexture, vUv).rgb;
+      vec3 bloom = texture2D(uBloom, vUv).rgb;
+
+      // Subtle iridescent edge sheen from dye gradients
+      float lum = dot(dye, vec3(0.299, 0.587, 0.114));
+      vec3 col = uBgColor * (1.0 - clamp(lum * 0.5, 0.0, 0.75)) + dye * 1.12 + bloom * 0.68;
+
+      // Gentle vignette
+      vec2 q = vUv - 0.5;
+      float vig = 1.0 - dot(q, q) * 0.42;
+      col *= vig;
+
+      // Subtle cosmic dust twinkle in dark regions
+      vec2 grid = floor(vec2(vUv.x * uAspect, vUv.y) * 90.0);
+      float star = hash21(grid);
+      if (star > 0.9965) {
+        float tw = 0.45 + 0.55 * sin(uTime * 2.2 + star * 900.0);
+        col += vec3(0.55, 0.72, 1.0) * tw * 0.18 * (1.0 - clamp(lum * 2.0, 0.0, 1.0));
+      }
+
+      col = aces(col);
+      col = pow(col, vec3(1.0 / 2.15));
+      gl_FragColor = vec4(col, 1.0);
+    }
+  `;
+
+  const progClear = createProgram(baseVS, clearFS);
+  const progSplat = createProgram(baseVS, splatFS);
+  const progAdvect = createProgram(baseVS, advectionFS);
+  const progDiv = createProgram(baseVS, divergenceFS);
+  const progCurl = createProgram(baseVS, curlFS);
+  const progVort = createProgram(baseVS, vorticityFS);
+  const progPressure = createProgram(baseVS, pressureFS);
+  const progGrad = createProgram(baseVS, gradSubtractFS);
+  const progBloom = createProgram(baseVS, bloomBlurFS);
+  const progDisplay = createProgram(baseVS, displayFS);
+
+  // Fullscreen quad
+  const quadBuf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, -1, 1, 1, 1, 1, -1]), gl.STATIC_DRAW);
+  const quadIdx = gl.createBuffer();
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, quadIdx);
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array([0, 1, 2, 0, 2, 3]), gl.STATIC_DRAW);
+  gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+  gl.enableVertexAttribArray(0);
+
+  function blit(target) {
+    if (target == null) {
+      gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    } else {
+      gl.viewport(0, 0, target.width, target.height);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, target.fbo);
+    }
+    gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0);
+  }
+
+  function createFBO(w, h, internalFormat, format, type, param) {
+    gl.activeTexture(gl.TEXTURE0);
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, param);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, param);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texImage2D(gl.TEXTURE_2D, 0, internalFormat, w, h, 0, format, type, null);
+
+    const fbo = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    // Fallback to RGBA if float/RG single-channel FBO is incomplete on an exotic GPU
+    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE && internalFormat !== gl.RGBA) {
+      return createFBO(w, h, isWebGL2 ? gl.RGBA16F : gl.RGBA, gl.RGBA, type, param);
+    }
+    gl.viewport(0, 0, w, h);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    return {
+      tex, fbo, width: w, height: h,
+      texelX: 1.0 / w, texelY: 1.0 / h,
+      attach(id) { gl.activeTexture(gl.TEXTURE0 + id); gl.bindTexture(gl.TEXTURE_2D, tex); return id; }
+    };
+  }
+
+  function createDoubleFBO(w, h, internalFormat, format, type, param) {
+    let fbo1 = createFBO(w, h, internalFormat, format, type, param);
+    let fbo2 = createFBO(w, h, internalFormat, format, type, param);
+    return {
+      width: w, height: h, texelX: fbo1.texelX, texelY: fbo1.texelY,
+      get read() { return fbo1; },
+      get write() { return fbo2; },
+      swap() { const t = fbo1; fbo1 = fbo2; fbo2 = t; }
+    };
+  }
+
+  let dye, velocity, divergence, curl, pressure, bloomA, bloomB;
+
+  function initFramebuffers() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.floor(window.innerWidth * dpr);
+    canvas.height = Math.floor(window.innerHeight * dpr);
+    overlay.width = canvas.width;
+    overlay.height = canvas.height;
+
+    const aspect = canvas.width / canvas.height;
+    const simBase = 224;
+    const dyeBase = 1024;
+    const simW = aspect >= 1 ? Math.round(simBase * aspect) : simBase;
+    const simH = aspect >= 1 ? simBase : Math.round(simBase / aspect);
+    const dyeW = aspect >= 1 ? Math.round(dyeBase * aspect) : dyeBase;
+    const dyeH = aspect >= 1 ? dyeBase : Math.round(dyeBase / aspect);
+    const filtering = supportLinearFiltering ? gl.LINEAR : gl.NEAREST;
+
+    dye = createDoubleFBO(dyeW, dyeH, rgbaFormat.internalFormat, rgbaFormat.format, halfFloatTexType, filtering);
+    velocity = createDoubleFBO(simW, simH, rgFormat.internalFormat, rgFormat.format, halfFloatTexType, filtering);
+    divergence = createFBO(simW, simH, rFormat.internalFormat, rFormat.format, halfFloatTexType, gl.NEAREST);
+    curl = createFBO(simW, simH, rFormat.internalFormat, rFormat.format, halfFloatTexType, gl.NEAREST);
+    pressure = createDoubleFBO(simW, simH, rFormat.internalFormat, rFormat.format, halfFloatTexType, gl.NEAREST);
+    bloomA = createFBO(dyeW >> 2, dyeH >> 2, rgbaFormat.internalFormat, rgbaFormat.format, halfFloatTexType, filtering);
+    bloomB = createFBO(dyeW >> 2, dyeH >> 2, rgbaFormat.internalFormat, rgbaFormat.format, halfFloatTexType, filtering);
+  }
+
+  initFramebuffers();
+  window.addEventListener("resize", () => initFramebuffers());
+
+  // =========================================================================
+  // 4. Fluid Injection, Kaleidoscope Symmetry, Gravity Stars & Luminous Spores
+  // =========================================================================
+  function rawSplat(x, y, dx, dy, rgb, radius = 0.0022) {
+    progSplat.bind();
+    gl.uniform1i(progSplat.uniforms.uTarget, velocity.read.attach(0));
+    gl.uniform1f(progSplat.uniforms.aspectRatio, canvas.width / canvas.height);
+    gl.uniform2f(progSplat.uniforms.point, x, y);
+    gl.uniform3f(progSplat.uniforms.color, dx, dy, 0.0);
+    gl.uniform1f(progSplat.uniforms.radius, radius);
+    blit(velocity.write);
+    velocity.swap();
+
+    gl.uniform1i(progSplat.uniforms.uTarget, dye.read.attach(0));
+    gl.uniform3f(progSplat.uniforms.color, rgb[0], rgb[1], rgb[2]);
+    blit(dye.write);
+    dye.swap();
+  }
+
+  function splat(x, y, dx, dy, rgb, radius = 0.0022) {
+    if (!kaleidoscope) {
+      rawSplat(x, y, dx, dy, rgb, radius);
+      return;
+    }
+    // 6-fold rotational + mirror kaleidoscope around screen center!
+    const aspect = canvas.width / canvas.height;
+    const cx = (x - 0.5) * aspect;
+    const cy = y - 0.5;
+    const vx = dx * aspect;
+    const vy = dy;
+    const folds = 6;
+    for (let i = 0; i < folds; i++) {
+      const ang = (i * Math.PI * 2) / folds;
+      const ca = Math.cos(ang), sa = Math.sin(ang);
+      const rx = (cx * ca - cy * sa) / aspect + 0.5;
+      const ry = (cx * sa + cy * ca) + 0.5;
+      const rvx = (vx * ca - vy * sa) / aspect;
+      const rvy = vx * sa + vy * ca;
+      rawSplat(rx, ry, rvx, rvy, rgb, radius * 0.72);
+    }
+  }
+
+  function pickPaletteColor(phase) {
+    const cols = PALETTES[currentPaletteIdx].colors;
+    const t = ((phase % cols.length) + cols.length) % cols.length;
+    const i0 = Math.floor(t);
+    const i1 = (i0 + 1) % cols.length;
+    const f = t - i0;
+    return [
+      cols[i0][0] * (1 - f) + cols[i1][0] * f,
+      cols[i0][1] * (1 - f) + cols[i1][1] * f,
+      cols[i0][2] * (1 - f) + cols[i1][2] * f,
+    ];
+  }
+
+  // Gravity Vortex Stars & Floating Bioluminescent Spores (rendered on crisp 2D overlay + feeding fluid!)
+  const stars = [];
+  const spores = [];
+  const MAX_SPORES = 140;
+  for (let i = 0; i < MAX_SPORES; i++) {
+    spores.push({
+      x: Math.random(),
+      y: Math.random(),
+      vx: (Math.random() - 0.5) * 0.0004,
+      vy: (Math.random() - 0.5) * 0.0004,
+      size: 1.2 + Math.random() * 2.6,
+      phase: Math.random() * 10,
+    });
+  }
+
+  function triggerSupernova(cx = 0.5, cy = 0.5) {
+    const rays = 18;
+    for (let i = 0; i < rays; i++) {
+      const a = (i / rays) * Math.PI * 2 + Math.random() * 0.15;
+      const speed = 1100 + Math.random() * 900;
+      const col = pickPaletteColor(i * 0.35).map(v => v * 1.15);
+      rawSplat(
+        cx + Math.cos(a) * 0.02,
+        cy + Math.sin(a) * 0.02,
+        Math.cos(a) * speed,
+        Math.sin(a) * speed,
+        col,
+        0.0034
+      );
+    }
+    audio.playChordBloom(cx, cy, true);
+  }
+
+  // =========================================================================
+  // 5. Pointer / Multi-Touch / Keyboard Controls
+  // =========================================================================
+  const pointers = new Map();
+  let colorCycle = 0;
+
+  function normCoords(clientX, clientY) {
+    return {
+      x: clientX / window.innerWidth,
+      y: 1.0 - clientY / window.innerHeight,
+    };
+  }
+
+  canvas.addEventListener("pointerdown", (e) => {
+    audio.init();
+    const { x, y } = normCoords(e.clientX, e.clientY);
+
+    if (e.button === 2) {
+      // Right-click removes nearest star (or oldest if far)
+      if (stars.length > 0) {
+        let bestIdx = 0, bestD = 1e9;
+        stars.forEach((s, idx) => {
+          const d = Math.hypot(s.x - x, s.y - y);
+          if (d < bestD) { bestD = d; bestIdx = idx; }
+        });
+        stars.splice(bestIdx, 1);
+      }
+      return;
+    }
+
+    pointers.set(e.pointerId, {
+      x, y, startX: x, startY: y,
+      downTime: performance.now(),
+      moved: 0,
+      hueOffset: Math.random() * 4,
+    });
+  });
+
+  window.addEventListener("pointermove", (e) => {
+    const { x, y } = normCoords(e.clientX, e.clientY);
+    let p = pointers.get(e.pointerId);
+
+    // Even gentle hover without pressing weaves delicate silk!
+    if (!p) {
+      if (!pointers.has("hover")) {
+        pointers.set("hover", { x, y, hueOffset: 0 });
+        return;
+      }
+      const h = pointers.get("hover");
+      const dx = x - h.x;
+      const dy = y - h.y;
+      h.x = x; h.y = y;
+      const dist = Math.hypot(dx, dy);
+      if (dist > 0.0005 && dist < 0.18) {
+        colorCycle += dist * 2.4;
+        const col = pickPaletteColor(colorCycle).map(v => v * 0.42);
+        splat(x, y, dx * 4200, dy * 4200, col, 0.0016);
+        if (audio.started) audio.modulateMotion(Math.min(1, dist * 22), y);
+      }
+      return;
+    }
+
+    const dx = x - p.x;
+    const dy = y - p.y;
+    const dist = Math.hypot(dx, dy);
+    p.moved += dist;
+    p.x = x; p.y = y;
+
+    if (dist > 0.0002) {
+      colorCycle += dist * 3.2;
+      const col = pickPaletteColor(colorCycle + p.hueOffset).map(v => v * 0.95);
+      splat(x, y, dx * 6800, dy * 6800, col, 0.0028);
+      audio.modulateMotion(Math.min(1, dist * 30), y);
+    }
+  });
+
+  window.addEventListener("pointerup", (e) => {
+    const p = pointers.get(e.pointerId);
+    if (!p) return;
+    pointers.delete(e.pointerId);
+
+    // Quick click/tap plants a spinning bioluminescent gravity star!
+    const dt = performance.now() - p.downTime;
+    if (p.moved < 0.018 && dt < 340) {
+      if (stars.length >= 7) stars.shift();
+      const spin = (stars.length % 2 === 0 ? 1 : -1);
+      stars.push({
+        x: p.x,
+        y: p.y,
+        spin,
+        born: performance.now() * 0.001,
+        hue: Math.random() * 4,
+      });
+      const col = pickPaletteColor(stars.length * 0.8).map(v => v * 1.3);
+      splat(p.x, p.y, 0, 0, col, 0.0045);
+      audio.playChordBloom(p.x, p.y, false);
+    }
+  });
+
+  canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+
+  // UI Buttons & Keyboard Shortcuts
+  const paletteBtns = document.querySelectorAll("[data-palette]");
+  function selectPalette(idx) {
+    currentPaletteIdx = (idx + PALETTES.length) % PALETTES.length;
+    paletteBtns.forEach((b, i) => b.classList.toggle("active", i === currentPaletteIdx));
+    if (audio.started) audio.setupDroneVoices();
+    triggerSupernova(0.5, 0.5);
+  }
+  paletteBtns.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      audio.init();
+      selectPalette(parseInt(btn.dataset.palette, 10));
+    });
+  });
+
+  const btnSym = document.getElementById("btnSym");
+  const btnAuto = document.getElementById("btnAuto");
+  const btnPulse = document.getElementById("btnPulse");
+  const btnClearStars = document.getElementById("btnClearStars");
+  const btnSnap = document.getElementById("btnSnap");
+  const hud = document.getElementById("hud");
+  const banner = document.getElementById("banner");
+
+  btnSym.addEventListener("click", () => {
+    audio.init();
+    kaleidoscope = !kaleidoscope;
+    btnSym.classList.toggle("active", kaleidoscope);
+    triggerSupernova(0.5, 0.5);
+  });
+
+  btnAuto.addEventListener("click", () => {
+    dreamMode = !dreamMode;
+    btnAuto.classList.toggle("active", dreamMode);
+  });
+
+  btnPulse.addEventListener("click", () => {
+    audio.init();
+    triggerSupernova(0.5, 0.5);
+  });
+
+  btnClearStars.addEventListener("click", () => {
+    stars.length = 0;
+  });
+
+  function saveSnapshot() {
+    const out = document.createElement("canvas");
+    out.width = canvas.width;
+    out.height = canvas.height;
+    const ctx = out.getContext("2d");
+    ctx.drawImage(canvas, 0, 0);
+    ctx.drawImage(overlay, 0, 0);
+    const link = document.createElement("a");
+    link.download = `chroma-loom-${Date.now()}.png`;
+    link.href = out.toDataURL("image/png");
+    link.click();
+  }
+  btnSnap.addEventListener("click", saveSnapshot);
+
+  function toggleHud() {
+    hudVisible = !hudVisible;
+    hud.classList.toggle("hidden", !hudVisible);
+    banner.classList.toggle("hidden", !hudVisible);
+    soundBadge.classList.toggle("hidden", !hudVisible);
+  }
+
+  window.addEventListener("keydown", (e) => {
+    if (e.key >= "1" && e.key <= "5") selectPalette(parseInt(e.key, 10) - 1);
+    else if (e.code === "Space") { e.preventDefault(); audio.init(); triggerSupernova(0.5, 0.5); }
+    else if (e.key === "k" || e.key === "K") btnSym.click();
+    else if (e.key === "a" || e.key === "A") btnAuto.click();
+    else if (e.key === "c" || e.key === "C") btnClearStars.click();
+    else if (e.key === "m" || e.key === "M") audio.toggleMute();
+    else if (e.key === "s" || e.key === "S") saveSnapshot();
+    else if (e.key === "h" || e.key === "H") toggleHud();
+  });
+
+  // =========================================================================
+  // 6. Main Simulation & Render Loop
+  // =========================================================================
+  const dreamRibbons = [
+    { phase: 0.0, speed: 0.31, rx: 0.28, ry: 0.24, fx: 1.0, fy: 1.618 },
+    { phase: 2.1, speed: 0.23, rx: 0.33, ry: 0.27, fx: 1.414, fy: 0.9 },
+  ];
+
+  let lastTime = performance.now();
+  // Opening bloom so the screen is immediately alive & gorgeous the instant it opens!
+  setTimeout(() => triggerSupernova(0.5, 0.5), 80);
+
+  function step(nowMs) {
+    const dt = Math.min((nowMs - lastTime) * 0.001, 0.033);
+    lastTime = nowMs;
+    const t = nowMs * 0.001;
+
+    // 1. Autonomous Lissajous Dream Currents
+    if (dreamMode && pointers.size <= 1) {
+      dreamRibbons.forEach((r, idx) => {
+        const prevA = (t - dt) * r.speed + r.phase;
+        const curA = t * r.speed + r.phase;
+        const px = 0.5 + Math.cos(prevA * r.fx) * r.rx * Math.cos(prevA * 0.37);
+        const py = 0.5 + Math.sin(prevA * r.fy) * r.ry;
+        const nx = 0.5 + Math.cos(curA * r.fx) * r.rx * Math.cos(curA * 0.37);
+        const ny = 0.5 + Math.sin(curA * r.fy) * r.ry;
+        const col = pickPaletteColor(t * 0.35 + idx * 1.7).map(v => v * 0.24);
+        splat(nx, ny, (nx - px) * 3400, (ny - py) * 3400, col, 0.0019);
+      });
+    }
+
+    // 2. Planted Gravity Vortex Stars stir swirling spiral arms into the fluid
+    stars.forEach((s, idx) => {
+      const a = t * 2.8 * s.spin + idx * 1.9;
+      const ox = s.x + Math.cos(a) * 0.018;
+      const oy = s.y + Math.sin(a) * 0.018;
+      const tx = -Math.sin(a) * s.spin * 220;
+      const ty = Math.cos(a) * s.spin * 220;
+      const col = pickPaletteColor(s.hue + t * 0.25).map(v => v * 0.30);
+      rawSplat(ox, oy, tx, ty, col, 0.0013);
+    });
+
+    // 3. Navier-Stokes GPU Fluid Step
+    gl.disable(gl.BLEND);
+
+    // Curl
+    progCurl.bind();
+    gl.uniform2f(progCurl.uniforms.texelSize, velocity.texelX, velocity.texelY);
+    gl.uniform1i(progCurl.uniforms.uVelocity, velocity.read.attach(0));
+    blit(curl);
+
+    // Vorticity confinement (silky swirling tendrils!)
+    progVort.bind();
+    gl.uniform2f(progVort.uniforms.texelSize, velocity.texelX, velocity.texelY);
+    gl.uniform1i(progVort.uniforms.uVelocity, velocity.read.attach(0));
+    gl.uniform1i(progVort.uniforms.uCurl, curl.attach(1));
+    gl.uniform1f(progVort.uniforms.curl, 32.0);
+    gl.uniform1f(progVort.uniforms.dt, dt);
+    blit(velocity.write);
+    velocity.swap();
+
+    // Divergence
+    progDiv.bind();
+    gl.uniform2f(progDiv.uniforms.texelSize, velocity.texelX, velocity.texelY);
+    gl.uniform1i(progDiv.uniforms.uVelocity, velocity.read.attach(0));
+    blit(divergence);
+
+    // Decay pressure slightly for smooth stability
+    progClear.bind();
+    gl.uniform1i(progClear.uniforms.uTexture, pressure.read.attach(0));
+    gl.uniform1f(progClear.uniforms.value, 0.82);
+    blit(pressure.write);
+    pressure.swap();
+
+    // Jacobi pressure solve (20 iterations)
+    progPressure.bind();
+    gl.uniform2f(progPressure.uniforms.texelSize, velocity.texelX, velocity.texelY);
+    gl.uniform1i(progPressure.uniforms.uDivergence, divergence.attach(0));
+    for (let i = 0; i < 20; i++) {
+      gl.uniform1i(progPressure.uniforms.uPressure, pressure.read.attach(1));
+      blit(pressure.write);
+      pressure.swap();
+    }
+
+    // Subtract pressure gradient
+    progGrad.bind();
+    gl.uniform2f(progGrad.uniforms.texelSize, velocity.texelX, velocity.texelY);
+    gl.uniform1i(progGrad.uniforms.uPressure, pressure.read.attach(0));
+    gl.uniform1i(progGrad.uniforms.uVelocity, velocity.read.attach(1));
+    blit(velocity.write);
+    velocity.swap();
+
+    // Advect velocity
+    progAdvect.bind();
+    gl.uniform2f(progAdvect.uniforms.texelSize, velocity.texelX, velocity.texelY);
+    gl.uniform1i(progAdvect.uniforms.uVelocity, velocity.read.attach(0));
+    gl.uniform1i(progAdvect.uniforms.uSource, velocity.read.attach(0));
+    gl.uniform1f(progAdvect.uniforms.dt, dt);
+    gl.uniform1f(progAdvect.uniforms.dissipation, 0.24);
+    blit(velocity.write);
+    velocity.swap();
+
+    // Advect dye
+    gl.uniform2f(progAdvect.uniforms.texelSize, velocity.texelX, velocity.texelY);
+    gl.uniform1i(progAdvect.uniforms.uVelocity, velocity.read.attach(0));
+    gl.uniform1i(progAdvect.uniforms.uSource, dye.read.attach(1));
+    gl.uniform1f(progAdvect.uniforms.dissipation, 0.58);
+    blit(dye.write);
+    dye.swap();
+
+    // 4. Multi-pass soft bioluminescent bloom
+    progBloom.bind();
+    gl.uniform2f(progBloom.uniforms.texelSize, bloomA.texelX * 2.0, bloomA.texelY * 2.0);
+    gl.uniform1i(progBloom.uniforms.uTexture, dye.read.attach(0));
+    blit(bloomA);
+    for (let i = 0; i < 3; i++) {
+      gl.uniform2f(progBloom.uniforms.texelSize, bloomA.texelX * (2.5 + i), bloomA.texelY * (2.5 + i));
+      gl.uniform1i(progBloom.uniforms.uTexture, bloomA.attach(0));
+      blit(bloomB);
+      gl.uniform1i(progBloom.uniforms.uTexture, bloomB.attach(0));
+      blit(bloomA);
+    }
+
+    // 5. Composite to screen
+    const bg = PALETTES[currentPaletteIdx].bg;
+    progDisplay.bind();
+    gl.uniform1i(progDisplay.uniforms.uTexture, dye.read.attach(0));
+    gl.uniform1i(progDisplay.uniforms.uBloom, bloomA.attach(1));
+    gl.uniform3f(progDisplay.uniforms.uBgColor, bg[0], bg[1], bg[2]);
+    gl.uniform1f(progDisplay.uniforms.uTime, t);
+    gl.uniform1f(progDisplay.uniforms.uAspect, canvas.width / canvas.height);
+    blit(null);
+
+    // 6. Render crisp glowing Gravity Stars & drifting Luminous Spores on 2D overlay
+    octx.clearRect(0, 0, overlay.width, overlay.height);
+    octx.globalCompositeOperation = "lighter";
+
+    // Spores gently attracted/orbited by stars
+    for (let i = 0; i < spores.length; i++) {
+      const sp = spores[i];
+      stars.forEach((st) => {
+        const dx = st.x - sp.x;
+        const dy = st.y - sp.y;
+        const d2 = dx * dx + dy * dy + 0.002;
+        const inv = 0.000018 / d2;
+        sp.vx += (dx * 0.45 - dy * st.spin) * inv;
+        sp.vy += (dy * 0.45 + dx * st.spin) * inv;
+      });
+      sp.vx *= 0.985;
+      sp.vy *= 0.985;
+      sp.x = (sp.x + sp.vx + 1) % 1;
+      sp.y = (sp.y + sp.vy + 1) % 1;
+
+      const sx = sp.x * overlay.width;
+      const sy = (1 - sp.y) * overlay.height;
+      const pulse = 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(t * 1.8 + sp.phase));
+      const c = pickPaletteColor(sp.phase + t * 0.15);
+      const r = Math.round(c[0] * 255), g = Math.round(c[1] * 255), b = Math.round(c[2] * 255);
+      octx.fillStyle = `rgba(${r},${g},${b},${(0.42 * pulse).toFixed(3)})`;
+      octx.beginPath();
+      octx.arc(sx, sy, sp.size * (window.devicePixelRatio || 1), 0, Math.PI * 2);
+      octx.fill();
+    }
+
+    // Planted Gravity Stars
+    stars.forEach((st, idx) => {
+      const sx = st.x * overlay.width;
+      const sy = (1 - st.y) * overlay.height;
+      const dpr = window.devicePixelRatio || 1;
+      const c = pickPaletteColor(st.hue + t * 0.25);
+      const r = Math.round(c[0] * 255), g = Math.round(c[1] * 255), b = Math.round(c[2] * 255);
+      const breathe = 1 + 0.16 * Math.sin(t * 3.2 + idx);
+
+      const grad = octx.createRadialGradient(sx, sy, 0, sx, sy, 34 * dpr * breathe);
+      grad.addColorStop(0, "rgba(255,255,255,0.95)");
+      grad.addColorStop(0.22, `rgba(${r},${g},${b},0.75)`);
+      grad.addColorStop(1, "rgba(0,0,0,0)");
+      octx.fillStyle = grad;
+      octx.beginPath();
+      octx.arc(sx, sy, 34 * dpr * breathe, 0, Math.PI * 2);
+      octx.fill();
+
+      // Delicate orbital halo ring
+      octx.strokeStyle = `rgba(${r},${g},${b},0.35)`;
+      octx.lineWidth = 1.2 * dpr;
+      octx.beginPath();
+      octx.arc(sx, sy, (16 + 3 * Math.sin(t * 2 + idx)) * dpr, t * st.spin * 1.5, t * st.spin * 1.5 + Math.PI * 1.35);
+      octx.stroke();
+    });
+
+    requestAnimationFrame(step);
+  }
+
+  requestAnimationFrame(step);
+})();
+</script>
+</body>
+</html>
